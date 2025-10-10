@@ -1,0 +1,99 @@
+# ===========================
+# SSRS SQL Dependency Extractor
+# ===========================
+# Requirements:
+# - PowerShell 5.1+ or PowerShell 7+
+# - SQL Server Management SDK (ScriptDom library)
+#   -> Installed with SQL Server Data Tools or can be copied from:
+#      "C:\Program Files (x86)\Microsoft SQL Server\<version>\DTS\Binn\Microsoft.SqlServer.TransactSql.ScriptDom.dll"
+
+# ---------- CONFIG ----------
+$inputCsv = "C:\Temp\SSRS_SQL_Extract.csv"   # your exported CSV from SQL
+$outputCsv = "C:\Temp\SSRS_SQL_Parsed.csv"   # output file with table + column lineage
+$scriptDomPath = "C:\Program Files (x86)\Microsoft SQL Server\160\DTS\Binn\Microsoft.SqlServer.TransactSql.ScriptDom.dll"
+# adjust version if needed (e.g. 150, 140, etc.)
+
+# ---------- LOAD LIBRARY ----------
+if (-not (Test-Path $scriptDomPath)) {
+    Write-Error "❌ ScriptDom DLL not found: $scriptDomPath"
+    Write-Host "Search under 'C:\Program Files (x86)\Microsoft SQL Server\' for the right folder."
+    exit
+}
+Add-Type -Path $scriptDomPath
+
+# ---------- CHOOSE PARSER ----------
+# Try to use the latest T-SQL parser available
+$parser = New-Object Microsoft.SqlServer.TransactSql.ScriptDom.TSql160Parser($false)
+
+# ---------- READ CSV ----------
+$queries = Import-Csv -Path $inputCsv
+
+# ---------- PREPARE OUTPUT ----------
+$output = @()
+
+foreach ($q in $queries) {
+    $report = $q.ReportName
+    $dataset = $q.DataSetName
+    $sql = $q.SQLQuery
+
+    if ([string]::IsNullOrWhiteSpace($sql)) { continue }
+
+    # Parse SQL text
+    $reader = New-Object System.IO.StringReader($sql)
+    $errors = New-Object System.Collections.Generic.List[Microsoft.SqlServer.TransactSql.ScriptDom.ParseError]
+    $fragment = $parser.Parse($reader, [ref]$errors)
+
+    if ($errors.Count -gt 0) {
+        $errMsg = ($errors | ForEach-Object { "$($_.Line):$($_.Column) - $($_.Message)" }) -join "; "
+        Write-Warning "⚠️ Parse error in report '$report' dataset '$dataset': $errMsg"
+        continue
+    }
+
+    # Collect table and column references
+    $tables = New-Object System.Collections.Generic.List[string]
+    $columns = New-Object System.Collections.Generic.List[string]
+
+    function TraverseNode($node) {
+        if ($null -eq $node) { return }
+
+        # Capture tables
+        if ($node -is [Microsoft.SqlServer.TransactSql.ScriptDom.NamedTableReference]) {
+            $tables.Add($node.SchemaObject.BaseIdentifier.Value)
+        }
+
+        # Capture columns
+        if ($node -is [Microsoft.SqlServer.TransactSql.ScriptDom.ColumnReferenceExpression]) {
+            $colParts = $node.MultiPartIdentifier.Identifiers |
+                ForEach-Object { $_.Value }
+            $columns.Add(($colParts -join "."))
+        }
+
+        # Recurse child properties
+        $props = $node.GetType().GetProperties() | Where-Object { $_.PropertyType.FullName -like "*ScriptDom*" -or $_.PropertyType.IsGenericType }
+        foreach ($prop in $props) {
+            $val = $prop.GetValue($node, $null)
+            if ($val -is [System.Collections.IEnumerable]) {
+                foreach ($item in $val) { TraverseNode $item }
+            } else {
+                TraverseNode $val
+            }
+        }
+    }
+
+    TraverseNode $fragment
+
+    # Deduplicate and record
+    $uniqueTables = ($tables | Sort-Object -Unique) -join ", "
+    $uniqueColumns = ($columns | Sort-Object -Unique) -join ", "
+
+    $output += [PSCustomObject]@{
+        ReportName = $report
+        DataSetName = $dataset
+        Tables = $uniqueTables
+        Columns = $uniqueColumns
+    }
+}
+
+# ---------- WRITE OUTPUT ----------
+$output | Export-Csv -Path $outputCsv -NoTypeInformation -Encoding UTF8
+Write-Host "✅ Parsing complete! Output saved to $outputCsv"
