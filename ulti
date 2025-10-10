@@ -1,0 +1,32 @@
+;WITH ReportXML AS (
+    SELECT
+        C.Name AS ReportName,
+        TRY_CONVERT(XML, CONVERT(VARBINARY(MAX), C.Content)) AS ReportXML
+    FROM ReportServer.dbo.Catalog C
+    WHERE C.Type = 2
+)
+SELECT
+    R.ReportName,
+    DS.value('@Name', 'NVARCHAR(255)') AS DataSetName,
+    DS.value('(ns:Query/ns:CommandText/text())[1]', 'NVARCHAR(MAX)') AS SQLQuery,
+    F.value('@Name', 'NVARCHAR(255)') AS FieldName
+FROM ReportXML AS R
+CROSS APPLY ReportXML.nodes('
+    declare namespace ns="http://schemas.microsoft.com/sqlserver/reporting/2016/01/reportdefinition";
+    /ns:Report/ns:DataSets/ns:DataSet
+') AS D(DS)
+OUTER APPLY DS.nodes('ns:Fields/ns:Field') AS F(F)
+
+UNION ALL
+
+SELECT
+    R.ReportName,
+    DS.value('@Name', 'NVARCHAR(255)'),
+    DS.value('(ns:Query/ns:CommandText/text())[1]', 'NVARCHAR(MAX)'),
+    F.value('@Name', 'NVARCHAR(255)')
+FROM ReportXML AS R
+CROSS APPLY ReportXML.nodes('
+    declare namespace ns="http://schemas.microsoft.com/sqlserver/reporting/2010/01/reportdefinition";
+    /ns:Report/ns:DataSets/ns:DataSet
+') AS D(DS)
+OUTER APPLY DS.nodes('ns:Fields/ns:Field') AS F(F);
