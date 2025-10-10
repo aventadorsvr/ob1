@@ -1,0 +1,13 @@
+;WITH ReportXML AS (
+    SELECT
+        C.Name AS ReportName,
+        CONVERT(XML, CONVERT(VARBINARY(MAX), C.Content)) AS ReportXML
+    FROM ReportServer.dbo.Catalog C
+    WHERE C.Type = 2
+)
+SELECT
+    R.ReportName,
+    DS.value('@Name', 'NVARCHAR(255)') AS DataSetName,
+    DS.value('(Query/CommandText/text())[1]', 'NVARCHAR(MAX)') AS SQLQuery
+FROM ReportXML
+CROSS APPLY ReportXML.nodes('/*/DataSets/DataSet') AS T(DS);
