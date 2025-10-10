@@ -1,0 +1,30 @@
+WITH XMLNAMESPACES (
+    'http://schemas.microsoft.com/sqlserver/reporting/2016/01/reportdefinition' AS ns2016,
+    'http://schemas.microsoft.com/sqlserver/reporting/2010/01/reportdefinition' AS ns2010
+),
+ReportXML AS (
+    SELECT
+        C.Name AS ReportName,
+        TRY_CONVERT(XML, CONVERT(VARBINARY(MAX), C.Content)) AS ReportXML
+    FROM ReportServer.dbo.Catalog C
+    WHERE C.Type = 2
+)
+SELECT
+    R.ReportName,
+    DS.value('@Name', 'NVARCHAR(255)') AS DataSetName,
+    DS.value('(ns2016:Query/ns2016:CommandText/text())[1]', 'NVARCHAR(MAX)') AS SQLQuery,
+    F.value('@Name', 'NVARCHAR(255)') AS FieldName
+FROM ReportXML AS R
+CROSS APPLY ReportXML.nodes('/ns2016:Report/ns2016:DataSets/ns2016:DataSet') AS D(DS)
+OUTER APPLY DS.nodes('ns2016:Fields/ns2016:Field') AS F(F)
+
+UNION ALL
+
+SELECT
+    R.ReportName,
+    DS.value('@Name', 'NVARCHAR(255)'),
+    DS.value('(ns2010:Query/ns2010:CommandText/text())[1]', 'NVARCHAR(MAX)'),
+    F.value('@Name', 'NVARCHAR(255)')
+FROM ReportXML AS R
+CROSS APPLY ReportXML.nodes('/ns2010:Report/ns2010:DataSets/ns2010:DataSet') AS D(DS)
+OUTER APPLY DS.nodes('ns2010:Fields/ns2010:Field') AS F(F);
