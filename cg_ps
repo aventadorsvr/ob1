@@ -1,0 +1,24 @@
+$reportsPath = "C:\SSRS_Reports"
+$outputFile = "C:\SSRS_SQL_Extract.csv"
+
+$results = @()
+
+Get-ChildItem -Path $reportsPath -Filter *.rdl -Recurse | ForEach-Object {
+    $report = $_.FullName
+    [xml]$xml = Get-Content $report
+
+    foreach ($dataset in $xml.Report.DataSets.DataSet) {
+        $query = $dataset.Query.CommandText -replace '\s+', ' '
+        $fields = ($dataset.Fields.Field | ForEach-Object { $_.Name }) -join ', '
+
+        $results += [PSCustomObject]@{
+            ReportName = $_.BaseName
+            DataSetName = $dataset.Name
+            SQLQuery = $query
+            FieldsUsed = $fields
+        }
+    }
+}
+
+$results | Export-Csv -Path $outputFile -NoTypeInformation
+Write-Host "Done! Extracted to $outputFile"
